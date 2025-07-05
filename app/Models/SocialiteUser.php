@@ -5,6 +5,7 @@ namespace App\Models;
 use DutchCodingCompany\FilamentSocialite\Models\Contracts\FilamentSocialiteUser as FilamentSocialiteUserContract;
 use Illuminate\Contracts\Auth\Authenticatable;
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Support\Facades\Log;
 use Laravel\Socialite\Contracts\User as SocialiteUserContract;
 
 class SocialiteUser extends Model implements FilamentSocialiteUserContract
@@ -13,6 +14,9 @@ class SocialiteUser extends Model implements FilamentSocialiteUserContract
         'user_id',
         'provider',
         'provider_id',
+        'google_access_token',
+        'google_refresh_token',
+        'google_expires_at',
     ];
 
     public function getUser(): Authenticatable
@@ -39,6 +43,20 @@ class SocialiteUser extends Model implements FilamentSocialiteUserContract
                 'user_id' => $user->id,
                 'provider' => $provider,
                 'provider_id' => $oauthUser->getId(),
+            ]);
+    }
+
+    public static function updateGoogleToken(
+        Model $socialiteUser,
+        SocialiteUserContract $oauthUser
+    ): bool
+    {
+        Log::info('OAuth User:', ['user' => json_encode($oauthUser)]);
+        return $socialiteUser
+            ->update([
+                'google_access_token' => $oauthUser->token, // Ini token aksesnya
+                'google_refresh_token' => $oauthUser->refreshToken, // Simpan refresh token jika ada
+                'google_expires_at' => now()->addSeconds($oauthUser->expiresIn), // Waktu kadaluarsa token akses
             ]);
     }
 }

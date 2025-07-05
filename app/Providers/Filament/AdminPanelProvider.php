@@ -68,7 +68,17 @@ class AdminPanelProvider extends PanelProvider
                             ->icon('fab-google')
                             ->color(Color::hex('#4285F4'))
                             ->outlined(false)
-                            ->stateless(false),
+                            ->stateless(false)
+                            ->scopes(
+                                [
+                                    'openid',
+                                    'profile',
+                                    'email',
+                                    'https://www.googleapis.com/auth/documents', // Scope Docs API Anda
+                                    'https://www.googleapis.com/auth/drive',     // Jika perlu Drive API
+                                ]
+                            )
+                            ->with(['access_type' => 'offline', 'prompt' => 'consent'])
                     ])
                     // (optional) Override the panel slug to be used in the oauth routes. Defaults to the panel's configured path.
                     ->slug('admin')
