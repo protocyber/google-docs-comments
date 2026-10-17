@@ -291,6 +291,13 @@ class ProjectResource extends Resource
                         }
                     })
                     ->visible(fn(Project $record) => !empty($record->google_docs_id)),
+                ProjectResource\Actions\PositionedCommentActions::insertText(),
+                ProjectResource\Actions\PositionedCommentActions::commentOnText(),
+                Tables\Actions\Action::make('commentFromPreview')
+                    ->label('Komentar dari Preview')
+                    ->icon('heroicon-o-cursor-arrow-rays')
+                    ->url(fn (Project $record) => ProjectResource::getUrl('preview-comment', ['record' => $record]))
+                    ->visible(fn (Project $record) => filled($record->google_docs_id)),
             ])
             ->bulkActions([
                 Tables\Actions\BulkActionGroup::make([
@@ -312,6 +319,7 @@ class ProjectResource extends Resource
             'index' => Pages\ListProjects::route('/'),
             'create' => Pages\CreateProject::route('/create'),
             'edit' => Pages\EditProject::route('/{record}/edit'),
+            'preview-comment' => Pages\CommentFromPreview::route('/{record}/preview-comment'),
         ];
     }
 }
