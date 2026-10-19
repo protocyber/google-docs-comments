@@ -4,11 +4,14 @@ namespace App\Services;
 
 use App\Models\SocialiteUser;
 use App\Models\User;
+use App\Support\GoogleDocsFile;
 use Google\Client;
 use Google\Service\Docs;
 use Google\Service\Docs\BatchUpdateDocumentRequest;
 use Google\Service\Docs\Document;
 use Google\Service\Docs\Request as DocsRequest;
+use Google\Service\Drive;
+use Google\Service\Exception as GoogleServiceException;
 use RuntimeException;
 
 /**
@@ -36,9 +39,49 @@ class GoogleDocsCommenter
      */
     public function paragraphs(string $documentId): array
     {
-        $document = (new Docs($this->client))->documents->get($documentId);
+        return self::paragraphsOf($this->document($documentId));
+    }
 
-        return self::paragraphsOf($document);
+    /**
+     * The document, trimmed to what the preview and the comment code read.
+     * Refuses anything that is not a native Google Doc before fetching it.
+     *
+     * @throws UnsupportedDocument
+     */
+    public function document(string $documentId): Document
+    {
+        $this->assertCommentable($documentId);
+
+        try {
+            return (new Docs($this->client))->documents->get($documentId, ['fields' => GoogleDocsFile::PREVIEW_FIELDS]);
+        } catch (GoogleServiceException $e) {
+            throw $e->getCode() === 404 ? UnsupportedDocument::notFound() : $e;
+        }
+    }
+
+    /**
+     * Drive MIME type of the file, which tells a native Google Doc apart from
+     * an Office file opened in Docs (both live under docs.google.com/document).
+     *
+     * @throws UnsupportedDocument when the file is missing or not accessible
+     */
+    public function mimeType(string $fileId): string
+    {
+        try {
+            return (string) (new Drive($this->client))->files
+                ->get($fileId, ['fields' => 'mimeType', 'supportsAllDrives' => true])
+                ->getMimeType();
+        } catch (GoogleServiceException $e) {
+            throw in_array($e->getCode(), [403, 404], true) ? UnsupportedDocument::notFound() : $e;
+        }
+    }
+
+    /**
+     * @throws UnsupportedDocument
+     */
+    public function assertCommentable(string $fileId): void
+    {
+        GoogleDocsFile::assertSupported($this->mimeType($fileId));
     }
 
     /**

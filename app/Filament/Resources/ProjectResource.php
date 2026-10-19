@@ -5,6 +5,8 @@ namespace App\Filament\Resources;
 use App\Filament\Resources\ProjectResource\Pages;
 use App\Filament\Resources\ProjectResource\RelationManagers;
 use App\Models\Project;
+use App\Services\DocumentTypeCheck;
+use App\Support\GoogleDocsUrl;
 use Filament\Forms;
 use Filament\Forms\Form;
 use Filament\Notifications\Notification;
@@ -32,7 +34,29 @@ class ProjectResource extends Resource
             ->schema([
                 Forms\Components\TextInput::make('name')->required(),
                 Forms\Components\Textarea::make('description'),
-                Forms\Components\TextInput::make('google_docs_id')->label('Google Docs ID')->helperText('ID dokumen Google Docs terkait.'),
+                Forms\Components\TextInput::make('google_docs_id')
+                    ->label('URL Google Docs')
+                    ->placeholder('https://docs.google.com/document/d/…/edit')
+                    ->helperText('Tempel link dokumen dari address bar atau tombol Share. ID dokumen saja juga diterima.')
+                    // Stored as the document ID; shown and edited as a URL.
+                    ->formatStateUsing(fn (?string $state) => filled($state) ? GoogleDocsUrl::editUrl($state) : null)
+                    ->dehydrateStateUsing(fn (?string $state) => filled($state) ? GoogleDocsUrl::extractId($state) : null)
+                    ->rule(fn () => function (string $attribute, $value, \Closure $fail) {
+                        if (blank($value)) {
+                            return;
+                        }
+                        $id = GoogleDocsUrl::extractId($value);
+                        if ($id === null) {
+                            $fail('Bukan URL Google Docs yang valid. Contoh: https://docs.google.com/document/d/…/edit');
+
+                            return;
+                        }
+                        // The URL looks right; make sure the file is a native Google Doc
+                        // (an Office file opened in Docs has the same URL shape).
+                        if ($problem = app(DocumentTypeCheck::class)->problem(auth()->user(), $id)) {
+                            $fail($problem);
+                        }
+                    }),
             ]);
     }
 
@@ -41,7 +65,12 @@ class ProjectResource extends Resource
         return $table
             ->columns([
                 Tables\Columns\TextColumn::make('name'),
-                Tables\Columns\TextColumn::make('google_docs_id'),
+                Tables\Columns\TextColumn::make('google_docs_id')
+                    ->label('Dokumen')
+                    ->formatStateUsing(fn () => 'Buka di Google Docs')
+                    ->url(fn (Project $record) => filled($record->google_docs_id) ? GoogleDocsUrl::editUrl($record->google_docs_id) : null, shouldOpenInNewTab: true)
+                    ->icon('heroicon-o-arrow-top-right-on-square')
+                    ->color('primary'),
             ])
             ->filters([
                 //

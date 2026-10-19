@@ -9,7 +9,6 @@ use Filament\Notifications\Actions\Action as NotificationAction;
 use Filament\Notifications\Notification;
 use Filament\Resources\Pages\Concerns\InteractsWithRecord;
 use Filament\Resources\Pages\Page;
-use Google\Service\Docs;
 use Google\Service\Docs\Document;
 use Illuminate\Support\Str;
 
@@ -109,10 +108,7 @@ class CommentFromPreview extends Page
 
     private function fetch(): Document
     {
-        $commenter = new GoogleDocsCommenter(auth()->user());
-        $client = (fn () => $this->client)->call($commenter);
-
-        return (new Docs($client))->documents->get($this->record->google_docs_id);
+        return (new GoogleDocsCommenter(auth()->user()))->document($this->record->google_docs_id);
     }
 
     private static function normalize(string $text): string
