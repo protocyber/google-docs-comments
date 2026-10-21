@@ -85,6 +85,15 @@ class GoogleDocsCommenter
     }
 
     /**
+     * Authorized Guzzle client, for Docs API calls the installed PHP client
+     * cannot model (comments, comment anchors, insertComment).
+     */
+    public function http(): \GuzzleHttp\ClientInterface
+    {
+        return $this->client->authorize();
+    }
+
+    /**
      * @return array<int, array{start: int, end: int, text: string}>
      */
     public static function paragraphsOf(Document $document): array
@@ -191,7 +200,7 @@ class GoogleDocsCommenter
      */
     public function commentOnRange(string $documentId, array $range, string $content): array
     {
-        $response = $this->client->authorize()->request(
+        $response = $this->http()->request(
             'POST',
             'https://docs.googleapis.com/v1/documents/'.rawurlencode($documentId).':batchUpdate',
             ['json' => self::insertCommentPayload($range, $content), 'http_errors' => false],
