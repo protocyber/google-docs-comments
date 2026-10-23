@@ -5,16 +5,20 @@ namespace App\Filament\Resources\ProjectResource\Pages;
 use App\Filament\Resources\ProjectResource;
 use App\Services\GoogleDocsCommenter;
 use App\Services\GoogleDocsPreview;
+use App\Services\Preview\DocumentFetcher;
+use App\Services\Preview\FetchedDocument;
+use App\Services\Preview\PreviewResult;
+use App\Services\Preview\TextIndex;
 use Filament\Notifications\Actions\Action as NotificationAction;
 use Filament\Notifications\Notification;
 use Filament\Resources\Pages\Concerns\InteractsWithRecord;
 use Filament\Resources\Pages\Page;
-use Google\Service\Docs\Document;
 use Illuminate\Support\Str;
 
 /**
- * Spike: pick the comment location by selecting text in a document preview.
- * See docs/spikes/gdocs-preview-selection.md in the ewasgo root repo.
+ * Comment on a Google Doc by selecting text in a preview that mirrors the
+ * editor; existing comments are listed and linked to their text.
+ * See docs/superpowers/specs/2026-10-20-gdocs-preview-fidelity-comments-design.md (root repo).
  */
 class CommentFromPreview extends Page
 {
@@ -26,9 +30,19 @@ class CommentFromPreview extends Page
 
     public string $html = '';
 
+    /** @var list<string> */
+    public array $fontUrls = [];
+
+    /** @var list<array> */
+    public array $threads = [];
+
     public string $documentTitle = '';
 
     public ?string $revisionId = null;
+
+    public int $tabCount = 1;
+
+    public ?string $commentsError = null;
 
     public ?string $loadError = null;
 
@@ -46,10 +60,7 @@ class CommentFromPreview extends Page
     public function loadDocument(): void
     {
         try {
-            $document = $this->fetch();
-            $this->html = GoogleDocsPreview::render($document);
-            $this->documentTitle = (string) $document->getTitle();
-            $this->revisionId = $document->getRevisionId();
+            $this->apply(GoogleDocsPreview::build($this->fetch()));
             $this->loadError = null;
         } catch (\Throwable $e) {
             $this->loadError = self::message($e);
@@ -72,12 +83,11 @@ class CommentFromPreview extends Page
         try {
             $document = $this->fetch();
 
-            // Indexes are only valid for the revision that was rendered. If the
-            // document changed, accept the range only if it still holds the
-            // same text; otherwise refuse instead of commenting the wrong place.
-            $quote = GoogleDocsPreview::textBetween($document, $start, $end);
+            // Indexes belong to the rendered revision. Accept the range only if
+            // it still holds the same text; otherwise refuse and reload.
+            $quote = TextIndex::textBetween($document->content(), $start, $end);
             if (self::normalize($quote) !== self::normalize($seen)) {
-                $this->loadDocument();
+                $this->apply(GoogleDocsPreview::build($document));
                 $this->dispatch('gd-preview-reloaded');
                 Notification::make()
                     ->title('Dokumen berubah')
@@ -87,7 +97,7 @@ class CommentFromPreview extends Page
                 return;
             }
 
-            $result = (new GoogleDocsCommenter(auth()->user()))->commentOnRange(
+            $result = app(GoogleDocsCommenter::class, ['user' => auth()->user()])->commentOnRange(
                 $this->record->google_docs_id,
                 ['start' => $start, 'end' => $end, 'quote' => rtrim($quote, "\n")],
                 $comment,
@@ -99,23 +109,33 @@ class CommentFromPreview extends Page
                 ->actions([NotificationAction::make('open')->label('Buka di Google Docs')->url($result['link'], shouldOpenInNewTab: true)])
                 ->success()->send();
 
-            $this->loadDocument(); // refresh indexes for the next comment
-            $this->dispatch('gd-preview-reloaded');
+            $this->loadDocument();
+            $this->dispatch('gd-preview-reloaded', activate: $result['comment_id']);
         } catch (\Throwable $e) {
             Notification::make()->title('Gagal')->body(self::message($e))->danger()->persistent()->send();
         }
     }
 
-    private function fetch(): Document
+    private function apply(PreviewResult $r): void
     {
-        return (new GoogleDocsCommenter(auth()->user()))->document($this->record->google_docs_id);
+        $this->html = $r->html;
+        $this->fontUrls = $r->fontUrls();
+        $this->threads = $r->threads;
+        $this->documentTitle = $r->title;
+        $this->revisionId = $r->revisionId;
+        $this->tabCount = $r->tabCount;
+        $this->commentsError = $r->commentsError;
+    }
+
+    private function fetch(): FetchedDocument
+    {
+        return app(DocumentFetcher::class)->fetch(auth()->user(), $this->record->google_docs_id);
     }
 
     private static function normalize(string $text): string
     {
-        // The browser renders paragraph ends and soft breaks as \n and table
-        // cells with extra blank lines; atoms are U+FFFC on both sides.
-        // Compare letters, digits and atoms only.
+        // Paragraph ends, soft breaks and table cells differ between browser
+        // and API; atoms are U+FFFC on both sides. Compare letters, digits, atoms.
         return preg_replace('/[^\p{L}\p{N}\x{FFFC}]+/u', '', $text);
     }
 

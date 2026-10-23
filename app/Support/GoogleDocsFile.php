@@ -33,10 +33,10 @@ final class GoogleDocsFile
     ];
 
     /**
-     * documents.get field mask with only what GoogleDocsPreview, paragraphsOf()
-     * and textBetween() read. A converted .docx carries megabytes of
-     * per-paragraph styling; without the mask the PHP client needs ~140 MB to
-     * hydrate it. Tables are fetched three levels deep (a mask cannot recurse).
+     * documents.get field mask with only what paragraphsOf() reads.
+     * A converted .docx carries megabytes of per-paragraph styling; without the
+     * mask the PHP client needs ~140 MB to hydrate it. Tables are fetched three
+     * levels deep (a mask cannot recurse).
      */
     public const PREVIEW_FIELDS = 'title,revisionId,inlineObjects,body('.self::CONTENT_L1.')';
 
