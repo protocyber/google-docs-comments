@@ -1,7 +1,7 @@
 /* Preview of a Google Doc: grey canvas, white page, comments sidebar.
    Inlined by the page and by the browser-test harness. */
 .gd-wrap { display: grid; grid-template-columns: minmax(0, 1fr) 22rem; gap: 1.5rem; align-items: start; }
-@media (max-width: 1024px) { .gd-wrap { grid-template-columns: 1fr; } }
+@media (max-width: 1024px) { .gd-wrap { grid-template-columns: minmax(0, 1fr); } }
 [x-cloak] { display: none !important; }
 
 .gd-canvas { background: #f1f3f4; border-radius: .5rem; padding: 1.5rem; max-height: 75vh; overflow: auto; }
