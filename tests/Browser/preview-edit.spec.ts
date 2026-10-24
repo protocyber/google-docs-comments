@@ -328,6 +328,103 @@ test('conflict keeps the text', async ({ page }) => {
     expect(errors).toEqual([]);
 });
 
+test('stale autosave debounce cancelled on leaveBlock', async ({ page }) => {
+    const errors = await open(page);
+    await toEdit(page);
+    const block = page.locator('[data-ps="27"]');
+    await block.click();
+    await setCaretAtEnd(page, '[data-ps="27"]');
+    await page.keyboard.type('X');
+    // Leave the block well within the 1500ms debounce window: leaveBlock
+    // flushes the pending change immediately and must cancel the timer.
+    await page.waitForTimeout(200);
+    await page.locator('[data-ps="64"]').click();
+    // Now advance well past the original 1500ms window; if the stale
+    // timer were not cancelled it would fire `triggerSave(null)` here.
+    await page.waitForTimeout(1700);
+    const w = await fakeWire(page);
+    const saves = w.calls.filter((c: any) => c.method === 'saveEdit');
+    expect(saves.length).toBe(1);
+    expect(saves[0].args[3]).toBe('X');
+    expect(errors).toEqual([]);
+});
+
+test('stale autosave debounce cancelled on switch to Komentar', async ({ page }) => {
+    const errors = await open(page);
+    await toEdit(page);
+    const block = page.locator('[data-ps="27"]');
+    await block.click();
+    await setCaretAtEnd(page, '[data-ps="27"]');
+    await page.keyboard.type('X');
+    // Switch mode within the debounce window: _leaveEditMode flushes the
+    // save immediately and must cancel the pending debounce timer too.
+    await page.waitForTimeout(200);
+    await page.locator('#gd-mode-comment').click();
+    await expect.poll(async () => (await state(page)).mode).toBe('comment');
+    await page.waitForTimeout(1700);
+    const w = await fakeWire(page);
+    const saves = w.calls.filter((c: any) => c.method === 'saveEdit');
+    expect(saves.length).toBe(1);
+    expect(saves[0].args[3]).toBe('X');
+    expect(errors).toEqual([]);
+});
+
+test('select-across-atom-then-type does not bypass atom protection', async ({ page }) => {
+    const errors = await open(page);
+    await toEdit(page);
+    const block = page.locator('[data-ps="64"]');
+    await block.click();
+    // Select a range spanning the image atom in "Gambar [img] lalu ...".
+    await page.evaluate(() => {
+        const p = document.querySelector('[data-ps="64"]') as HTMLElement;
+        const atom = p.querySelector('[data-atom]') as HTMLElement;
+        const before = atom.previousSibling as Text; // "Gambar "
+        const after = atom.nextSibling as Text; // " lalu ..."
+        const sel = window.getSelection()!;
+        const range = document.createRange();
+        range.setStart(before, 0);
+        range.setEnd(after, 1);
+        sel.removeAllRanges();
+        sel.addRange(range);
+    });
+    await page.keyboard.type('Q');
+    await page.waitForTimeout(1700);
+    const w = await fakeWire(page);
+    expect(w.calls.filter((c: any) => c.method === 'saveEdit')).toEqual([]);
+    await expect(page.locator('[data-ps="64"] [data-atom]')).toHaveCount(1);
+    expect(errors).toEqual([]);
+});
+
+test('paste strips markup and keeps newlines as paragraph breaks', async ({ page }) => {
+    const errors = await open(page);
+    await toEdit(page);
+    const block = page.locator('[data-ps="27"]');
+    await block.click();
+    await setCaretAtEnd(page, '[data-ps="27"]');
+    await page.evaluate(() => {
+        const el = document.querySelector('[data-ps="27"]') as HTMLElement;
+        const dt = new DataTransfer();
+        dt.setData('text/plain', 'a<b>x</b>\nb');
+        const ev = new InputEvent('beforeinput', {
+            inputType: 'insertFromPaste',
+            dataTransfer: dt,
+            cancelable: true,
+            bubbles: true,
+        });
+        el.dispatchEvent(ev);
+    });
+    await page.waitForTimeout(1700);
+    // No <b> element was created: the markup was inserted as plain text.
+    await expect(page.locator('[data-ps="27"] b')).toHaveCount(0);
+    expect(await block.textContent()).toContain('<b>x</b>');
+    const w = await fakeWire(page);
+    const save = w.calls.find((c: any) => c.method === 'saveEdit');
+    expect(save).toBeDefined();
+    // The newline from the pasted text became a paragraph break (\n).
+    expect(save.args[3]).toContain('\n');
+    expect(errors).toEqual([]);
+});
+
 test('comment mode unchanged', async ({ page }) => {
     const errors = await open(page);
     await toEdit(page);

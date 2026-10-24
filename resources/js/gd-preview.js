@@ -291,6 +291,17 @@
         sel.addRange(range);
     }
 
+    // Current selection as a one-element range array, if non-collapsed and
+    // inside block (used as a getTargetRanges() fallback for browsers/paths
+    // that don't populate it).
+    function currentSelectionRanges(block) {
+        const sel = global.getSelection();
+        if (!sel || sel.rangeCount === 0 || sel.isCollapsed) return [];
+        const r = sel.getRangeAt(0);
+        if (!block.contains(r.commonAncestorContainer)) return [];
+        return [r];
+    }
+
     function rangesOverlap(a, b) {
         return a.compareBoundaryPoints(Range.END_TO_START, b) < 0 && a.compareBoundaryPoints(Range.START_TO_END, b) > 0;
     }
@@ -401,6 +412,8 @@
             },
 
             reloaded(detail) {
+                clearTimeout(this._saveDebounce);
+                this._saveDebounce = null;
                 this.range = null;
                 this.comment = '';
                 global.getSelection().removeAllRanges();
@@ -450,6 +463,8 @@
             },
 
             async _leaveEditMode(next) {
+                clearTimeout(this._saveDebounce);
+                this._saveDebounce = null;
                 const block = this.block;
                 if (block) {
                     await this.triggerSave(block);
@@ -477,6 +492,8 @@
             },
 
             async leaveBlock(block) {
+                clearTimeout(this._saveDebounce);
+                this._saveDebounce = null;
                 block = block || this.block;
                 if (!block) return;
                 await this.triggerSave(block);
@@ -506,6 +523,14 @@
             onBeforeInput(e) {
                 if (this.mode !== 'edit' || !this.block || !this.block.contains(e.target)) return;
                 const t = e.inputType;
+                if (t === 'insertText' || t === 'insertReplacementText' || t === 'insertFromPaste' || t === 'insertFromDrop') {
+                    const targetRanges = e.getTargetRanges ? e.getTargetRanges() : [];
+                    const ranges = targetRanges.length ? targetRanges : currentSelectionRanges(this.block);
+                    if (rangesIntersectAtom(this.block, ranges)) {
+                        e.preventDefault();
+                        return;
+                    }
+                }
                 if (t === 'insertParagraph') {
                     e.preventDefault();
                     insertBreakAtCaret(this.block, 'data-pb');
@@ -552,6 +577,7 @@
             },
 
             triggerSave(block) {
+                if (!block || !block.isConnected) return Promise.resolve();
                 if (block._saving) return block._savePromise;
                 block._saving = true;
                 block._savePromise = this._saveLoop(block).finally(() => { block._saving = false; });
@@ -615,6 +641,8 @@
 
             async reloadAfterConflict() {
                 if (!global.confirm('Perubahan yang belum tersimpan di paragraf ini akan hilang. Lanjut?')) return;
+                clearTimeout(this._saveDebounce);
+                this._saveDebounce = null;
                 if (this.block) {
                     this.block.removeAttribute('contenteditable');
                     this.block.removeAttribute('data-edited');
@@ -625,6 +653,8 @@
             },
 
             async mergeUp() {
+                clearTimeout(this._saveDebounce);
+                this._saveDebounce = null;
                 const block = this.block;
                 if (!block) return;
                 await this.triggerSave(block);
@@ -643,6 +673,8 @@
             },
 
             async deleteParagraph() {
+                clearTimeout(this._saveDebounce);
+                this._saveDebounce = null;
                 const block = this.block;
                 if (!block) return;
                 await this.triggerSave(block);
