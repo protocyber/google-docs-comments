@@ -16,6 +16,8 @@ final class PreviewResult
         public readonly ?string $revisionId,
         public readonly int $tabCount,
         public readonly ?string $commentsError,
+        public readonly bool $canEdit = false,
+        public readonly bool $canComment = false,
     ) {}
 
     /**

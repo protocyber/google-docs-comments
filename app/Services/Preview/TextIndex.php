@@ -68,4 +68,36 @@ final class TextIndex
 
         return mb_convert_encoding(substr($utf16, $from * 2, $length * 2), 'UTF-8', 'UTF-16LE');
     }
+
+    /**
+     * UTF-16LE byte string, 2 bytes per Docs index covering [1, endIndex):
+     * every text/atom run goes at its own index, structural gaps (table and
+     * row starts, cell starts, TOC start/end markers, section breaks) are
+     * left as U+0000. Index i (1-based) occupies bytes [(i-1)*2, i*2), so a
+     * later splice() is a plain byte substr_replace.
+     */
+    public static function indexed(array $content): string
+    {
+        $length = max(0, self::endIndex($content) - 1);
+        $buffer = str_repeat("\0", $length * 2);
+
+        foreach (self::runs($content) as [$s, $e, $text]) {
+            $utf16 = mb_convert_encoding($text, 'UTF-16LE', 'UTF-8');
+            $buffer = substr_replace($buffer, $utf16, ($s - 1) * 2, ($e - $s) * 2);
+        }
+
+        return $buffer;
+    }
+
+    /**
+     * Replaces indexes [$start, $end) in an `indexed()` string with $text
+     * (UTF-8, converted to UTF-16LE), the same edit a `batchUpdate` of
+     * EditRequest::build($start, $end, $text) performs on the document.
+     */
+    public static function splice(string $indexed, int $start, int $end, string $text): string
+    {
+        $utf16 = mb_convert_encoding($text, 'UTF-16LE', 'UTF-8');
+
+        return substr_replace($indexed, $utf16, ($start - 1) * 2, ($end - $start) * 2);
+    }
 }

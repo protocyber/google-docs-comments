@@ -44,4 +44,35 @@ class TextIndexTest extends TestCase
         // Body minus section break, table/toc start+end and cell starts.
         $this->assertGreaterThan(1000, $covered);
     }
+
+    public function test_indexed_aligns_with_docs_indexes(): void
+    {
+        $f = DocFixture::rich();
+        $c = $f->content();
+        $indexed = TextIndex::indexed($c);
+
+        $this->assertSame(TextIndex::endIndex($c) - 1, intdiv(strlen($indexed), 2));
+
+        foreach ([$f->pos('Kas tidak'), $f->pos('😀')] as [$s, $e]) {
+            $slice = substr($indexed, ($s - 1) * 2, ($e - $s) * 2);
+            $this->assertSame(TextIndex::textBetween($c, $s, $e), mb_convert_encoding($slice, 'UTF-8', 'UTF-16LE'));
+        }
+    }
+
+    public function test_splice_matches_a_refetch(): void
+    {
+        $a = new DocFixture;
+        $a->para(["Kas tidak sesuai dengan catatan.\n"]);
+        $a->para(["Paragraf kedua tidak berubah.\n"]);
+
+        $b = new DocFixture;
+        $b->para(["Kas sudah benar-benar sesuai dengan catatan.\n"]);
+        $b->para(["Paragraf kedua tidak berubah.\n"]);
+
+        [$s, $e] = $a->pos('tidak sesuai');
+
+        $spliced = TextIndex::splice(TextIndex::indexed($a->content()), $s, $e, 'sudah benar-benar sesuai');
+
+        $this->assertSame(TextIndex::indexed($b->content()), $spliced);
+    }
 }

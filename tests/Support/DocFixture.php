@@ -201,9 +201,9 @@ final class DocFixture
         return $body;
     }
 
-    public function fetched(bool $withComments = true, ?string $commentsError = null): FetchedDocument
+    public function fetched(bool $withComments = true, ?string $commentsError = null, bool $canEdit = true, bool $canComment = true): FetchedDocument
     {
-        return FetchedDocument::fromApi($this->api($withComments), $withComments, $commentsError);
+        return FetchedDocument::fromApi($this->api($withComments), $withComments, $commentsError, ['canEdit' => $canEdit, 'canComment' => $canComment]);
     }
 
     private function textAt(array $range): string

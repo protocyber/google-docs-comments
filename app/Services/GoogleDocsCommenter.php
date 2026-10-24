@@ -85,6 +85,99 @@ class GoogleDocsCommenter
     }
 
     /**
+     * Drive file metadata plus what the current user may do with it.
+     *
+     * @return array{mimeType: string, canEdit: bool, canComment: bool}
+     *
+     * @throws UnsupportedDocument when the file is missing or not accessible
+     */
+    public function fileInfo(string $fileId): array
+    {
+        $response = $this->http()->request(
+            'GET',
+            'https://www.googleapis.com/drive/v3/files/'.rawurlencode($fileId),
+            ['query' => ['fields' => 'mimeType,capabilities(canEdit,canComment)', 'supportsAllDrives' => 'true'], 'http_errors' => false],
+        );
+
+        $status = $response->getStatusCode();
+        $body = json_decode((string) $response->getBody(), true) ?? [];
+
+        if (in_array($status, [403, 404], true)) {
+            throw UnsupportedDocument::notFound();
+        }
+        if ($status >= 400) {
+            throw new RuntimeException('Google Drive API: '.($body['error']['message'] ?? 'HTTP '.$status));
+        }
+
+        return [
+            'mimeType' => (string) ($body['mimeType'] ?? ''),
+            'canEdit' => (bool) ($body['capabilities']['canEdit'] ?? false),
+            'canComment' => (bool) ($body['capabilities']['canComment'] ?? false),
+        ];
+    }
+
+    /**
+     * Plain-text edit: `batchUpdate` with the given requests, guarded by
+     * `writeControl.requiredRevisionId` so Google refuses the write (rather
+     * than silently merging) when the document changed since the caller
+     * last fetched it.
+     *
+     * @param  list<array>  $requests  EditRequest::build() output
+     * @return string new revisionId
+     *
+     * @throws DocumentChanged when $revisionId is no longer the latest
+     * @throws RuntimeException on any other API error
+     */
+    public function applyEdit(string $documentId, string $revisionId, array $requests): string
+    {
+        $response = $this->http()->request(
+            'POST',
+            'https://docs.googleapis.com/v1/documents/'.rawurlencode($documentId).':batchUpdate',
+            [
+                'json' => ['requests' => $requests, 'writeControl' => ['requiredRevisionId' => $revisionId]],
+                'http_errors' => false,
+            ],
+        );
+
+        $body = json_decode((string) $response->getBody(), true) ?? [];
+
+        if ($response->getStatusCode() >= 400) {
+            $error = $body['error'] ?? [];
+            if (($error['status'] ?? null) === 'INVALID_ARGUMENT'
+                && str_contains((string) ($error['message'] ?? ''), 'does not match the latest revision')) {
+                throw new DocumentChanged((string) $error['message']);
+            }
+
+            throw new RuntimeException('Google Docs API: '.($error['message'] ?? 'HTTP '.$response->getStatusCode()));
+        }
+
+        return (string) ($body['writeControl']['requiredRevisionId'] ?? '');
+    }
+
+    /**
+     * Marks a Drive comment resolved, optionally with a reply (Task 1: an
+     * empty reply sends only {action: resolve}).
+     */
+    public function resolveComment(string $documentId, string $commentId, string $reply): void
+    {
+        $json = ['action' => 'resolve'];
+        if (trim($reply) !== '') {
+            $json['content'] = $reply;
+        }
+
+        $response = $this->http()->request(
+            'POST',
+            'https://www.googleapis.com/drive/v3/files/'.rawurlencode($documentId).'/comments/'.rawurlencode($commentId).'/replies',
+            ['json' => $json, 'http_errors' => false],
+        );
+
+        $body = json_decode((string) $response->getBody(), true) ?? [];
+        if ($response->getStatusCode() >= 400) {
+            throw new RuntimeException('Google Drive API: '.($body['error']['message'] ?? 'HTTP '.$response->getStatusCode()));
+        }
+    }
+
+    /**
      * Authorized Guzzle client, for Docs API calls the installed PHP client
      * cannot model (comments, comment anchors, insertComment).
      */

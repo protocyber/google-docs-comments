@@ -33,6 +33,8 @@ class GoogleDocsPreview
             revisionId: $doc->revisionId,
             tabCount: $doc->tabCount,
             commentsError: $doc->commentsError,
+            canEdit: $doc->canEdit,
+            canComment: $doc->canComment,
         );
     }
 }

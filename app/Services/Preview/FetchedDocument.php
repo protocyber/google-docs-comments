@@ -22,9 +22,11 @@ final class FetchedDocument
         public readonly ?array $comments,
         public readonly array $otherTabAnchorIds,
         public readonly ?string $commentsError = null,
+        public readonly bool $canEdit = false,
+        public readonly bool $canComment = false,
     ) {}
 
-    public static function fromApi(array $body, bool $withComments, ?string $commentsError = null): self
+    public static function fromApi(array $body, bool $withComments, ?string $commentsError = null, array $capabilities = []): self
     {
         $tabs = $body['tabs'] ?? [];
         $first = $tabs[0] ?? [];
@@ -45,6 +47,8 @@ final class FetchedDocument
             comments: $withComments ? ($body['comments'] ?? []) : null,
             otherTabAnchorIds: array_values(array_unique($other)),
             commentsError: $commentsError,
+            canEdit: (bool) ($capabilities['canEdit'] ?? false),
+            canComment: (bool) ($capabilities['canComment'] ?? false),
         );
     }
 

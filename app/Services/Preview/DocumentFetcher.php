@@ -5,6 +5,7 @@ namespace App\Services\Preview;
 use App\Models\User;
 use App\Services\GoogleDocsCommenter;
 use App\Services\UnsupportedDocument;
+use App\Support\GoogleDocsFile;
 use RuntimeException;
 
 /**
@@ -45,17 +46,19 @@ class DocumentFetcher
     public function fetch(User $user, string $documentId): FetchedDocument
     {
         $commenter = app(GoogleDocsCommenter::class, ['user' => $user]);
-        $commenter->assertCommentable($documentId);
+        $info = $commenter->fileInfo($documentId);
+        GoogleDocsFile::assertSupported($info['mimeType']);
+        $capabilities = ['canEdit' => $info['canEdit'], 'canComment' => $info['canComment']];
 
         $body = $this->get($commenter, $documentId, true);
         if ($body !== null) {
-            return FetchedDocument::fromApi($body, true);
+            return FetchedDocument::fromApi($body, true, capabilities: $capabilities);
         }
 
         $body = $this->get($commenter, $documentId, false)
             ?? throw UnsupportedDocument::notFound();
 
-        return FetchedDocument::fromApi($body, false, 'Komentar tidak bisa dimuat: tidak ada akses.');
+        return FetchedDocument::fromApi($body, false, 'Komentar tidak bisa dimuat: tidak ada akses.', $capabilities);
     }
 
     public static function query(bool $withComments): array

@@ -24,7 +24,11 @@ class DocumentFetcherTest extends TestCase
         $stack = HandlerStack::create(new MockHandler($responses));
         $stack->push(Middleware::history($this->history));
         $commenter = Mockery::mock(GoogleDocsCommenter::class);
-        $commenter->shouldReceive('assertCommentable')->once()->with('DOC');
+        $commenter->shouldReceive('fileInfo')->once()->with('DOC')->andReturn([
+            'mimeType' => 'application/vnd.google-apps.document',
+            'canEdit' => true,
+            'canComment' => true,
+        ]);
         $commenter->shouldReceive('http')->andReturn(new Client(['handler' => $stack]));
         $this->app->bind(GoogleDocsCommenter::class, fn () => $commenter);
     }
@@ -74,5 +78,24 @@ class DocumentFetcherTest extends TestCase
         $this->fakeGoogle(new Response(400, [], json_encode(['error' => ['message' => 'Invalid field mask']])));
         $this->expectExceptionMessage('Google Docs API: Invalid field mask');
         app(DocumentFetcher::class)->fetch(User::factory()->make(), 'DOC');
+    }
+
+    public function test_capabilities_reach_the_document(): void
+    {
+        $stack = HandlerStack::create(new MockHandler([new Response(200, [], json_encode(DocFixture::rich()->api()))]));
+        $stack->push(Middleware::history($this->history));
+        $commenter = Mockery::mock(GoogleDocsCommenter::class);
+        $commenter->shouldReceive('fileInfo')->once()->with('DOC')->andReturn([
+            'mimeType' => 'application/vnd.google-apps.document',
+            'canEdit' => false,
+            'canComment' => true,
+        ]);
+        $commenter->shouldReceive('http')->andReturn(new Client(['handler' => $stack]));
+        $this->app->bind(GoogleDocsCommenter::class, fn () => $commenter);
+
+        $doc = app(DocumentFetcher::class)->fetch(User::factory()->make(), 'DOC');
+
+        $this->assertFalse($doc->canEdit);
+        $this->assertTrue($doc->canComment);
     }
 }
