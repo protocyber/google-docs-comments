@@ -3,9 +3,12 @@
 namespace App\Filament\Resources\ProjectResource\Pages;
 
 use App\Filament\Resources\ProjectResource;
+use App\Services\DocumentChanged;
 use App\Services\GoogleDocsCommenter;
 use App\Services\GoogleDocsPreview;
 use App\Services\Preview\DocumentFetcher;
+use App\Services\Preview\EditBase;
+use App\Services\Preview\EditRequest;
 use App\Services\Preview\FetchedDocument;
 use App\Services\Preview\PreviewResult;
 use App\Services\Preview\TextIndex;
@@ -14,6 +17,8 @@ use Filament\Notifications\Notification;
 use Filament\Resources\Pages\Concerns\InteractsWithRecord;
 use Filament\Resources\Pages\Page;
 use Illuminate\Support\Str;
+use InvalidArgumentException;
+use Livewire\Attributes\Locked;
 
 /**
  * Comment on a Google Doc by selecting text in a preview that mirrors the
@@ -46,6 +51,12 @@ class CommentFromPreview extends Page
 
     public ?string $loadError = null;
 
+    #[Locked]
+    public bool $canEdit = false;
+
+    #[Locked]
+    public bool $canComment = false;
+
     public function mount(int|string $record): void
     {
         $this->record = $this->resolveRecord($record);
@@ -60,7 +71,9 @@ class CommentFromPreview extends Page
     public function loadDocument(): void
     {
         try {
-            $this->apply(GoogleDocsPreview::build($this->fetch()));
+            $document = $this->fetch();
+            $this->apply(GoogleDocsPreview::build($document));
+            $this->storeBase($document);
             $this->loadError = null;
         } catch (\Throwable $e) {
             $this->loadError = self::message($e);
@@ -88,6 +101,7 @@ class CommentFromPreview extends Page
             $quote = TextIndex::textBetween($document->content(), $start, $end);
             if (self::normalize($quote) !== self::normalize($seen)) {
                 $this->apply(GoogleDocsPreview::build($document));
+                $this->storeBase($document);
                 $this->dispatch('gd-preview-reloaded');
                 Notification::make()
                     ->title('Dokumen berubah')
@@ -116,6 +130,111 @@ class CommentFromPreview extends Page
         }
     }
 
+    /**
+     * Applies one text replacement to the live Google Doc. Always skips the
+     * Livewire render: a mid-edit re-render would overwrite the user's DOM.
+     *
+     * @return array{ok: true, revisionId: string}|array{ok: false, reason: string, message?: string}
+     */
+    public function saveEdit(string $revisionId, int $start, int $end, string $text): array
+    {
+        $this->skipRender();
+
+        if (! $this->canEdit) {
+            return ['ok' => false, 'reason' => 'forbidden', 'message' => 'Anda tidak punya akses edit ke dokumen ini.'];
+        }
+
+        try {
+            $requests = EditRequest::build($start, $end, $text);
+        } catch (InvalidArgumentException $e) {
+            return ['ok' => false, 'reason' => 'invalid', 'message' => $e->getMessage()];
+        }
+
+        $docId = $this->record->google_docs_id;
+        $commenter = app(GoogleDocsCommenter::class, ['user' => auth()->user()]);
+
+        try {
+            $newRevision = $commenter->applyEdit($docId, $revisionId, $requests);
+            $this->advanceBase($revisionId, $newRevision, $start, $end, $text);
+            $this->revisionId = $newRevision;
+
+            return ['ok' => true, 'revisionId' => $newRevision];
+        } catch (DocumentChanged $e) {
+            return $this->recoverStaleRevision($commenter, $docId, $revisionId, $start, $end, $text);
+        } catch (\Throwable $e) {
+            return ['ok' => false, 'reason' => 'error', 'message' => self::message($e)];
+        }
+    }
+
+    /**
+     * Only comments changed since $revisionId (an insertComment/resolve also
+     * bumps revisionId): re-fetch and compare the indexed text against the
+     * cached base. Equal -> the document text itself did not move, so retry
+     * the same edit once against the fresh revision. Anything else -
+     * different text, missing base, or stale again - is a genuine conflict.
+     */
+    private function recoverStaleRevision(
+        GoogleDocsCommenter $commenter,
+        string $docId,
+        string $staleRevision,
+        int $start,
+        int $end,
+        string $text,
+    ): array {
+        $base = EditBase::get(auth()->id(), $docId, $staleRevision);
+        if ($base === null) {
+            return ['ok' => false, 'reason' => 'conflict'];
+        }
+
+        try {
+            $document = $this->fetch();
+        } catch (\Throwable $e) {
+            return ['ok' => false, 'reason' => 'error', 'message' => self::message($e)];
+        }
+
+        $fresh = TextIndex::indexed($document->content());
+        if ($fresh !== $base || $document->revisionId === null) {
+            return ['ok' => false, 'reason' => 'conflict'];
+        }
+
+        $freshRevision = $document->revisionId;
+        EditBase::put(auth()->id(), $docId, $freshRevision, $fresh);
+
+        try {
+            $requests = EditRequest::build($start, $end, $text);
+            $newRevision = $commenter->applyEdit($docId, $freshRevision, $requests);
+            $this->advanceBase($freshRevision, $newRevision, $start, $end, $text);
+            $this->revisionId = $newRevision;
+
+            return ['ok' => true, 'revisionId' => $newRevision];
+        } catch (DocumentChanged $e) {
+            return ['ok' => false, 'reason' => 'conflict'];
+        } catch (\Throwable $e) {
+            return ['ok' => false, 'reason' => 'error', 'message' => self::message($e)];
+        }
+    }
+
+    /** After a successful save, the base for the new revision is the old base spliced by the same edit. */
+    private function advanceBase(string $oldRevision, string $newRevision, int $start, int $end, string $text): void
+    {
+        $userId = auth()->id();
+        $base = EditBase::get($userId, $this->record->google_docs_id, $oldRevision);
+        if ($base === null) {
+            return;
+        }
+
+        EditBase::put($userId, $this->record->google_docs_id, $newRevision, TextIndex::splice($base, $start, $end, $text));
+    }
+
+    private function storeBase(FetchedDocument $document): void
+    {
+        if ($document->revisionId === null) {
+            return;
+        }
+
+        EditBase::put(auth()->id(), $this->record->google_docs_id, $document->revisionId, TextIndex::indexed($document->content()));
+    }
+
     private function apply(PreviewResult $r): void
     {
         $this->html = $r->html;
@@ -125,6 +244,8 @@ class CommentFromPreview extends Page
         $this->revisionId = $r->revisionId;
         $this->tabCount = $r->tabCount;
         $this->commentsError = $r->commentsError;
+        $this->canEdit = $r->canEdit;
+        $this->canComment = $r->canComment;
     }
 
     private function fetch(): FetchedDocument

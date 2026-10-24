@@ -122,6 +122,16 @@
             range: null, comment: '', busy: false, active: null, flash: null, showResolved: false,
             _flashTimer: null, _fit: null,
 
+            // Edit mode (Task 4b wires the real behaviour; these are no-op
+            // stubs so the toolbar has no Alpine errors before then).
+            mode: 'comment', save: 'saved', block: null, revision: null,
+
+            setMode(next) { this.mode = next; },
+            retrySave() {},
+            copyBlock() {},
+            reloadAfterConflict() {},
+            deleteParagraph() {},
+
             get activeCss() { return highlightCss(this.active, this.flash); },
 
             init() {

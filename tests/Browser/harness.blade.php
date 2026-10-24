@@ -10,6 +10,10 @@
 <body style="margin:0;padding:1rem;font-family:sans-serif">
 <div class="gd-wrap" x-data="gdPreviewPage()" x-on:gd-preview-reloaded.window="reloaded($event.detail)">
     <div>
+        @include('filament.pages.partials.gd-toolbar', [
+            'documentTitle' => 'Fixture', 'tabCount' => 1, 'canEdit' => true, 'canComment' => true,
+            'record' => (object) ['google_docs_id' => 'DOC'],
+        ])
         @include('filament.pages.partials.gd-canvas', ['html' => $html])
     </div>
     <div class="gd-side">
