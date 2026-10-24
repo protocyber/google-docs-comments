@@ -66,23 +66,33 @@ final class HtmlRenderer
         return '<style>'.$css.'</style>';
     }
 
-    private function content(array $content): string
+    private function content(array $content, bool $toc = false): string
     {
         $html = '';
-        foreach ($content as $element) {
+        $count = count($content);
+        foreach ($content as $i => $element) {
             if (isset($element['paragraph'])) {
-                $html .= $this->paragraph($element['paragraph']);
+                $prevIsPara = $i > 0 && isset($content[$i - 1]['paragraph']);
+                $nextIsPara = $i + 1 < $count && isset($content[$i + 1]['paragraph']);
+                $html .= $this->paragraph(
+                    $element['paragraph'],
+                    (int) $element['startIndex'],
+                    (int) $element['endIndex'],
+                    $prevIsPara,
+                    $nextIsPara,
+                    $toc,
+                );
             } elseif (isset($element['table'])) {
                 $html .= $this->table($element['table']);
             } elseif (isset($element['tableOfContents'])) {
-                $html .= '<div class="gd-toc">'.$this->content($element['tableOfContents']['content'] ?? []).'</div>';
+                $html .= '<div class="gd-toc">'.$this->content($element['tableOfContents']['content'] ?? [], true).'</div>';
             }
         }
 
         return $html;
     }
 
-    private function paragraph(array $p): string
+    private function paragraph(array $p, int $s, int $e, bool $prevIsPara, bool $nextIsPara, bool $toc): string
     {
         $own = $p['paragraphStyle'] ?? [];
         $type = (string) ($own['namedStyleType'] ?? 'NORMAL_TEXT');
@@ -121,9 +131,31 @@ final class HtmlRenderer
         }
 
         $tag = self::TAGS[$type] ?? 'p';
+        $ds = $s;
+        $de = $nextIsPara ? $e : $e - 1;
+        $ro = match (true) {
+            $toc => 'toc',
+            $this->hasSuggestion($p) => 'suggestion',
+            default => null,
+        };
+        $attrs = ' data-ps="'.$s.'" data-pe="'.($e - 1).'" data-ds="'.$ds.'" data-de="'.$de.'"'
+            .($prevIsPara ? ' data-merge' : '')
+            .($ro !== null ? ' data-ro="'.$ro.'"' : '');
 
-        return '<'.$tag.' class="gd-n-'.$type.'"'.self::styleAttr(StyleResolver::paragraphCss($own)).'>'
+        return '<'.$tag.' class="gd-n-'.$type.'"'.$attrs.self::styleAttr(StyleResolver::paragraphCss($own)).'>'
             .$marker.$inner.'</'.$tag.'>';
+    }
+
+    private function hasSuggestion(array $p): bool
+    {
+        foreach ($p['elements'] ?? [] as $part) {
+            $run = $part['textRun'] ?? null;
+            if ($run !== null && (! empty($run['suggestedInsertionIds']) || ! empty($run['suggestedDeletionIds']))) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private function element(array $part): string

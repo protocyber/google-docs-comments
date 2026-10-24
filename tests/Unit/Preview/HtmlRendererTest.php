@@ -58,15 +58,15 @@ class HtmlRendererTest extends TestCase
         $this->assertStringStartsWith('<div class="gd-page" style="width:612pt;min-height:792pt;padding:72pt 72pt 72pt 72pt;"><style>', $html);
         $this->assertStringContainsString(".gd-page{font-family:'Arial',Arial,sans-serif;font-size:11pt;}", $html);
         $this->assertStringContainsString(".gd-page .gd-n-HEADING_1{line-height:1.32;margin-top:20pt;margin-bottom:6pt;font-family:'Roboto',Arial,sans-serif;font-weight:700;font-size:20pt;}", $html);
-        $this->assertStringContainsString('<h1 class="gd-n-HEADING_1"><span data-s="1" data-e="26">Laporan Hasil Pemeriksaan</span></h1>', $html);
-        $this->assertStringContainsString('<p class="gd-n-NORMAL_TEXT" style="text-align:justify;margin-inline-start:0pt;text-indent:36pt;">', $html);
+        $this->assertStringContainsString('<h1 class="gd-n-HEADING_1" data-ps="1" data-pe="26" data-ds="1" data-de="27"><span data-s="1" data-e="26">Laporan Hasil Pemeriksaan</span></h1>', $html);
+        $this->assertStringContainsString('<p class="gd-n-NORMAL_TEXT" data-ps="27" data-pe="63" data-ds="27" data-de="64" data-merge style="text-align:justify;margin-inline-start:0pt;text-indent:36pt;">', $html);
         $this->assertSame(['Roboto'], $r->fonts());
     }
 
     public function test_lists_markers_and_indents(): void
     {
         $html = $this->render(DocFixture::rich()->fetched());
-        $this->assertStringContainsString('<p class="gd-n-NORMAL_TEXT" style="margin-inline-start:36pt;text-indent:-18pt;"><span data-deco class="gd-marker" aria-hidden="true" style="min-width:18pt;">1.</span>', $html);
+        $this->assertStringContainsString('<p class="gd-n-NORMAL_TEXT" data-ps="91" data-pe="101" data-ds="91" data-de="102" data-merge style="margin-inline-start:36pt;text-indent:-18pt;"><span data-deco class="gd-marker" aria-hidden="true" style="min-width:18pt;">1.</span>', $html);
         $this->assertStringContainsString('<span data-deco class="gd-marker" aria-hidden="true" style="min-width:18pt;">a)</span>', $html);
         $this->assertStringContainsString('>2.</span>', $html);
     }
@@ -81,11 +81,11 @@ class HtmlRendererTest extends TestCase
         $this->assertMatchesRegularExpression('/class="gd-link">tautan<\/span>/', $html);
         $this->assertMatchesRegularExpression('/data-atom="1" class="gd-atom gd-pagebreak"><\/span>/', $html);
         $this->assertMatchesRegularExpression('/data-atom="1" class="gd-atom">@Budi<\/span>/', $html);
-        $this->assertStringContainsString('<div class="gd-toc"><p class="gd-n-NORMAL_TEXT">', $html);
+        $this->assertStringContainsString('<div class="gd-toc"><p class="gd-n-NORMAL_TEXT" data-ps="175" data-pe="191" data-ds="175" data-de="191" data-ro="toc">', $html);
         $this->assertStringContainsString('<colgroup><col style="width:100pt"><col style="width:368pt"></colgroup>', $html);
         $this->assertStringContainsString('<td style="background-color:#e6e6e6;">', $html);
         $this->assertMatchesRegularExpression('/<tr><td colspan="2">(?:(?!<\/tr>).)*Gabung(?:(?!<\/tr>).)*<\/td><\/tr>/s', $html);
-        $this->assertStringContainsString('<p class="gd-n-NORMAL_TEXT"><span data-deco>&#8203;</span></p>', $html);
+        $this->assertStringContainsString('<p class="gd-n-NORMAL_TEXT" data-ps="166" data-pe="166" data-ds="166" data-de="167" data-merge><span data-deco>&#8203;</span></p>', $html);
         $this->assertStringContainsString('baris lunak', $html);
         $this->assertStringContainsString(" lalu \nbaris lunak", $html);
     }
@@ -101,6 +101,78 @@ class HtmlRendererTest extends TestCase
         $html = $this->render($f->fetched());
         $this->assertStringNotContainsString('javascript:', $html);
         $this->assertStringContainsString('[gambar]', $html);
+    }
+
+    public function test_paragraph_edit_ranges(): void
+    {
+        $f = DocFixture::rich();
+        $content = $f->content();
+        $html = $this->render($f->fetched());
+        $dom = new DOMDocument;
+        libxml_use_internal_errors(true);
+        $dom->loadHTML('<?xml encoding="UTF-8"><div id="root">'.$html.'</div>', LIBXML_HTML_NODEFDTD);
+        libxml_clear_errors();
+        $xp = new DOMXPath($dom);
+
+        $isPara = fn ($el) => $el !== null && isset($el['paragraph']);
+
+        // Heading: first body paragraph, preceded by the document's initial sectionBreak.
+        $heading = $content[1];
+        $next = $content[2];
+        $node = $xp->query("//h1[contains(., 'Laporan Hasil Pemeriksaan')]")->item(0);
+        $this->assertNotNull($node, 'heading not found');
+        $this->assertSame((string) $heading['startIndex'], $node->getAttribute('data-ps'));
+        $this->assertSame((string) ($heading['endIndex'] - 1), $node->getAttribute('data-pe'));
+        $this->assertSame((string) $heading['startIndex'], $node->getAttribute('data-ds'));
+        $this->assertTrue($isPara($next));
+        $this->assertSame((string) $heading['endIndex'], $node->getAttribute('data-de'));
+        $this->assertFalse($node->hasAttribute('data-merge'));
+        $this->assertFalse($node->hasAttribute('data-ro'));
+
+        // "Temuan" paragraph: previous and next are both paragraphs.
+        $temuan = $content[2];
+        $node = $xp->query("//p[contains(., 'Temuan')]")->item(0);
+        $this->assertNotNull($node, 'Temuan paragraph not found');
+        $this->assertSame((string) $temuan['startIndex'], $node->getAttribute('data-ps'));
+        $this->assertSame((string) ($temuan['endIndex'] - 1), $node->getAttribute('data-pe'));
+        $this->assertSame((string) $temuan['startIndex'], $node->getAttribute('data-ds'));
+        $this->assertSame((string) $temuan['endIndex'], $node->getAttribute('data-de'));
+        $this->assertTrue($node->hasAttribute('data-merge'));
+
+        // "Pisah" paragraph: next element is the TOC, not a paragraph.
+        $pisah = $content[10];
+        $this->assertFalse($isPara($content[11]));
+        $node = $xp->query("//p[contains(., 'Pisah')]")->item(0);
+        $this->assertNotNull($node, 'Pisah paragraph not found');
+        $this->assertSame((string) $pisah['startIndex'], $node->getAttribute('data-ds'));
+        $this->assertSame((string) ($pisah['endIndex'] - 1), $node->getAttribute('data-de'));
+
+        // TOC line: read-only as "toc".
+        $node = $xp->query("//div[@class='gd-toc']//p[contains(., 'Daftar isi baris')]")->item(0);
+        $this->assertNotNull($node, 'TOC line not found');
+        $this->assertSame('toc', $node->getAttribute('data-ro'));
+
+        // "Usulan" paragraph: carries suggested insertion/deletion runs.
+        $node = $xp->query("//p[contains(., 'Usulan')]")->item(0);
+        $this->assertNotNull($node, 'Usulan paragraph not found');
+        $this->assertSame('suggestion', $node->getAttribute('data-ro'));
+
+        // Cell paragraph "Kas tidak sesuai": alone in its cell's content list.
+        $node = $xp->query("//td//p[contains(., 'Kas tidak sesuai')]")->item(0);
+        $this->assertNotNull($node, 'cell paragraph not found');
+        [$ks] = $f->pos('Kas tidak sesuai');
+        $ke = $ks + TextIndex::utf16Length('Kas tidak sesuai') + 1; // + trailing "\n"
+        $this->assertSame((string) $ks, $node->getAttribute('data-ds'));
+        $this->assertSame((string) ($ke - 1), $node->getAttribute('data-de'));
+        $this->assertFalse($node->hasAttribute('data-merge'));
+
+        // Last body paragraph: no next element, previous is a paragraph.
+        $last = end($content);
+        $node = $xp->query("//p[contains(., 'Kalimat akhir untuk komentar jauh')]")->item(0);
+        $this->assertNotNull($node, 'last paragraph not found');
+        $this->assertSame((string) $last['startIndex'], $node->getAttribute('data-ds'));
+        $this->assertSame((string) ($last['endIndex'] - 1), $node->getAttribute('data-de'));
+        $this->assertTrue($node->hasAttribute('data-merge'));
     }
 
     public static function documents(): iterable
