@@ -51,6 +51,14 @@
 .gd-more { background: none; border: 0; color: #1a73e8; cursor: pointer; padding: 0; font-size: .75rem; }
 .gd-open { float: right; color: #6b7280; padding: .5rem .75rem 0 0; }
 
+.gd-resolve { padding: 0 .75rem .5rem; }
+.gd-resolve-btn { font-size: .75rem; border: 1px solid #d1d5db; border-radius: .375rem; padding: .15rem .6rem; background: none; cursor: pointer; color: inherit; }
+.gd-resolve-form { margin-top: .4rem; }
+.gd-resolve-form textarea { font-size: .75rem; }
+.gd-resolve-actions { display: flex; gap: .5rem; margin-top: .25rem; }
+.gd-resolve-confirm { font-size: .75rem; border: 0; border-radius: .375rem; padding: .25rem .6rem; background: rgb(var(--primary-500, 59 130 246)); color: #fff; cursor: pointer; }
+.gd-resolve-cancel { font-size: .75rem; border: 0; background: none; color: #6b7280; cursor: pointer; padding: .25rem .4rem; }
+
 /* Edit-mode toolbar: mode toggle, save indicator, delete-paragraph. */
 .gd-toolbar-row { display: flex; align-items: center; gap: .75rem; flex-wrap: wrap; }
 .gd-mode-toggle { display: inline-flex; border: 1px solid #d1d5db; border-radius: .375rem; overflow: hidden; }

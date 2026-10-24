@@ -439,3 +439,48 @@ test('comment mode unchanged', async ({ page }) => {
     await expect.poll(async () => (await state(page)).mode).toBe('comment');
     expect(errors).toEqual([]);
 });
+
+test('resolve sends next open comment', async ({ page }) => {
+    const errors = await open(page);
+    const card = page.locator('.gd-card[data-comment-id="c2"]');
+    await card.locator('.gd-resolve-btn').click();
+    await card.locator('.gd-resolve-confirm').click();
+    await expect.poll(async () => (await fakeWire(page)).calls.some((c: any) => c.method === 'resolveComment')).toBe(true);
+    const w = await fakeWire(page);
+    const call = w.calls.find((c: any) => c.method === 'resolveComment');
+    expect(call.args).toEqual(['c2', '', 'c3']);
+    expect(errors).toEqual([]);
+});
+
+test('resolve button click does not activate the card', async ({ page }) => {
+    const errors = await open(page);
+    const card = page.locator('.gd-card[data-comment-id="c2"]');
+    await card.locator('.gd-resolve-btn').click();
+    await expect.poll(async () => (await state(page)) as any).not.toBeNull();
+    const data = await page.evaluate(() => (window as any).Alpine.$data(document.querySelector('.gd-wrap')));
+    expect(data.active).toBeNull();
+    expect(errors).toEqual([]);
+});
+
+test('resolve in edit mode saves first', async ({ page }) => {
+    const errors = await open(page);
+    await toEdit(page);
+    const block = page.locator('[data-ps="27"]');
+    await block.click();
+    await setCaretAtEnd(page, '[data-ps="27"]');
+    await page.keyboard.type('X');
+    // Resolve before the 1500ms debounce fires: resolve() must flush the
+    // pending save first and send it before resolveComment.
+    await page.waitForTimeout(100);
+    const card = page.locator('.gd-card[data-comment-id="c2"]');
+    await card.locator('.gd-resolve-btn').click();
+    await card.locator('.gd-resolve-confirm').click();
+    await expect.poll(async () => (await fakeWire(page)).calls.some((c: any) => c.method === 'resolveComment')).toBe(true);
+    const w = await fakeWire(page);
+    const saveIdx = w.calls.findIndex((c: any) => c.method === 'saveEdit');
+    const resolveIdx = w.calls.findIndex((c: any) => c.method === 'resolveComment');
+    expect(saveIdx).toBeGreaterThanOrEqual(0);
+    expect(resolveIdx).toBeGreaterThan(saveIdx);
+    expect(w.calls[saveIdx].args[3]).toBe('X');
+    expect(errors).toEqual([]);
+});

@@ -232,4 +232,33 @@ class PreviewEditTest extends TestCase
             ->assertSeeHtml('target="_blank"')
             ->assertSee('Ctrl+Alt+Shift+H');
     }
+
+    public function test_resolve_reloads_and_activates_next(): void
+    {
+        $this->fakeFetcher(DocFixture::rich()->fetched(), DocFixture::rich()->fetched());
+
+        $commenter = Mockery::mock(GoogleDocsCommenter::class);
+        $commenter->shouldReceive('resolveComment')->once()->with('DOC', 'c2', 'Sudah');
+        $this->app->bind(GoogleDocsCommenter::class, fn () => $commenter);
+
+        $this->page()
+            ->call('resolveComment', 'c2', 'Sudah', 'c3')
+            ->assertDispatched('gd-preview-reloaded', activate: 'c3');
+    }
+
+    public function test_resolve_without_comment_access_is_refused(): void
+    {
+        $this->fakeFetcher(DocFixture::rich()->fetched(canComment: false));
+
+        $commenter = Mockery::mock(GoogleDocsCommenter::class);
+        $commenter->shouldNotReceive('resolveComment');
+        $this->app->bind(GoogleDocsCommenter::class, fn () => $commenter);
+
+        $testable = $this->page()
+            ->call('resolveComment', 'c2', '', 'c3')
+            ->assertNotDispatched('gd-preview-reloaded');
+        $testable
+            ->assertDontSeeHtml('class="gd-resolve-btn"')
+            ->assertDontSee('Tandai selesai');
+    }
 }

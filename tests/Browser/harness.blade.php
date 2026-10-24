@@ -41,7 +41,7 @@
         @include('filament.pages.partials.gd-canvas', ['html' => $html])
     </div>
     <div class="gd-side">
-        @include('filament.pages.partials.gd-comment-list', ['threads' => $threads, 'commentsError' => null, 'documentId' => 'DOC'])
+        @include('filament.pages.partials.gd-comment-list', ['threads' => $threads, 'commentsError' => null, 'documentId' => 'DOC', 'canComment' => true])
     </div>
 </div>
 </body>

@@ -52,6 +52,7 @@
 
                 @include('filament.pages.partials.gd-comment-list', [
                     'threads' => $threads, 'commentsError' => $commentsError, 'documentId' => $record->google_docs_id,
+                    'canComment' => $canComment,
                 ])
             </x-filament::section>
         </div>

@@ -131,6 +131,31 @@ class CommentFromPreview extends Page
     }
 
     /**
+     * Marks a comment resolved from the preview sidebar, with an optional
+     * reply, then reloads and asks the browser to activate the next card.
+     */
+    public function resolveComment(string $commentId, string $reply, ?string $next): void
+    {
+        if (! $this->canComment) {
+            Notification::make()->title('Anda tidak punya akses komentar ke dokumen ini.')->warning()->send();
+
+            return;
+        }
+
+        try {
+            app(GoogleDocsCommenter::class, ['user' => auth()->user()])
+                ->resolveComment($this->record->google_docs_id, $commentId, trim($reply));
+
+            Notification::make()->title('Komentar ditandai selesai')->success()->send();
+
+            $this->loadDocument();
+            $this->dispatch('gd-preview-reloaded', activate: $next);
+        } catch (\Throwable $e) {
+            Notification::make()->title('Gagal')->body(self::message($e))->danger()->persistent()->send();
+        }
+    }
+
+    /**
      * Applies one text replacement to the live Google Doc. Always skips the
      * Livewire render: a mid-edit re-render would overwrite the user's DOM.
      *

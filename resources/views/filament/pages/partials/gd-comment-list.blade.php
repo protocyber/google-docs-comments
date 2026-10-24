@@ -1,4 +1,4 @@
-{{-- Comment list. Needs: $threads, $commentsError, $documentId. --}}
+{{-- Comment list. Needs: $threads, $commentsError, $documentId, $canComment. --}}
 @php
     $open = collect($threads)->where('status', 'open')->count();
     $resolved = collect($threads)->where('status', 'resolved')->count();
@@ -58,6 +58,20 @@
                 @if ($t['quote'] !== '')<span class="gd-card-quote">{{ $t['quote'] }}</span>@endif
                 <span class="gd-card-body">{{ $t['content'] }}</span>
             </button>
+            @if ($canComment && $t['status'] !== 'resolved')
+                <div class="gd-resolve" x-data="{ resolving: false, reply: '' }" x-on:click.stop>
+                    <button type="button" class="gd-resolve-btn" x-show="!resolving" x-on:click="resolving = true">Resolve</button>
+                    <div x-show="resolving" x-cloak class="gd-resolve-form">
+                        <textarea x-model="reply" rows="2" placeholder="Sudah diperbaiki" aria-label="Balasan"
+                                  class="block w-full rounded-lg border-gray-300 dark:bg-gray-800 dark:border-gray-600 text-xs"></textarea>
+                        <div class="gd-resolve-actions">
+                            <button type="button" class="gd-resolve-confirm"
+                                    x-on:click="resolve(@js($t['id']), reply); resolving = false; reply = ''">Tandai selesai</button>
+                            <button type="button" class="gd-resolve-cancel" x-on:click="resolving = false; reply = ''">Batal</button>
+                        </div>
+                    </div>
+                </div>
+            @endif
             @if ($replies)
                 <div class="gd-replies" x-data="{ all: false }">
                     @if ($hidden)

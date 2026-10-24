@@ -701,6 +701,30 @@
                 await this.wire().loadDocument();
                 this.reloaded();
             },
+
+            // ---- Resolve from the sidebar -----------------------------------
+
+            nextOpenCard(id) {
+                const cards = Array.from(document.querySelectorAll('.gd-card[data-located="1"]'))
+                    .filter((c) => c.dataset.status !== 'resolved');
+                const at = cards.findIndex((c) => c.dataset.commentId === id || c.getAttribute('data-comment-id') === id);
+                if (at === -1) return cards.length ? cards[0].getAttribute('data-comment-id') : null;
+                for (let i = at + 1; i < cards.length; i++) return cards[i].getAttribute('data-comment-id');
+                const other = cards.filter((c) => c.getAttribute('data-comment-id') !== id);
+                return other.length ? other[0].getAttribute('data-comment-id') : null;
+            },
+
+            async resolve(id, reply) {
+                const next = this.nextOpenCard(id);
+                if (this.mode === 'edit' && this.block) {
+                    clearTimeout(this._saveDebounce);
+                    this._saveDebounce = null;
+                    await this.triggerSave(this.block);
+                    if (this.save === 'conflict' || this.save === 'error') return;
+                    this.leaveBlock(this.block);
+                }
+                await this.wire().resolveComment(id, reply || '', next);
+            },
         };
     }
 
