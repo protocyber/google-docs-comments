@@ -1,6 +1,6 @@
 /*
  * Google Docs preview: selection -> Docs indexes, comment navigation,
- * page fit-to-width, and the Alpine component for the page.
+ * page fit-to-width, edit mode, and the Alpine component for the page.
  * Inlined by the Filament page and by the browser-test harness.
  */
 (function (global) {
@@ -116,34 +116,259 @@
         return fit;
     }
 
+    // ---- Edit mode: window.GdEdit, pure DOM<->text helpers -------------
+
+    // Walks blockEl like the Docs text model: [data-atom] -> one U+FFFC,
+    // br[data-vt] -> U+000B (soft break), br[data-pb] -> '\n' (hard break
+    // inserted by Enter), [data-deco] ignored entirely, a trailing browser
+    // <br> (neither data-vt nor data-pb) ignored. When `target` is given
+    // ({node, offset} a DOM boundary inside blockEl) also records the
+    // character offset of that boundary in `state.found`.
+    function walkBlock(node, target, state) {
+        if (node.nodeType === Node.TEXT_NODE) {
+            if (state.found === null && target && target.node === node) {
+                state.found = state.text.length + target.offset;
+            }
+            state.text += node.data;
+            return;
+        }
+        if (node.nodeType !== Node.ELEMENT_NODE) return;
+        if (node.hasAttribute('data-deco')) return;
+        if (node.hasAttribute('data-atom')) {
+            if (state.found === null && target && target.node === node) state.found = state.text.length;
+            state.text += '\uFFFC';
+            return;
+        }
+        if (node.tagName === 'BR') {
+            if (state.found === null && target && target.node === node) state.found = state.text.length;
+            if (node.hasAttribute('data-vt')) state.text += '\u000B';
+            else if (node.hasAttribute('data-pb')) state.text += '\n';
+            // else: trailing browser-inserted <br>, contributes nothing.
+            return;
+        }
+        const children = node.childNodes;
+        for (let i = 0; i < children.length; i++) {
+            if (state.found === null && target && target.node === node && target.offset === i) {
+                state.found = state.text.length;
+            }
+            walkBlock(children[i], target, state);
+        }
+        if (state.found === null && target && target.node === node && target.offset === children.length) {
+            state.found = state.text.length;
+        }
+    }
+
+    function read(blockEl) {
+        const state = { text: '', found: null };
+        walkBlock(blockEl, null, state);
+        return state.text;
+    }
+
+    // Character offset (GdEdit.read units) of a DOM boundary inside blockEl.
+    function offsetOf(blockEl, node, offset) {
+        const state = { text: '', found: null };
+        walkBlock(blockEl, { node: node, offset: offset }, state);
+        return state.found !== null ? state.found : state.text.length;
+    }
+
+    function isHighSurrogate(code) { return code >= 0xd800 && code <= 0xdbff; }
+    function isLowSurrogate(code) { return code >= 0xdc00 && code <= 0xdfff; }
+
+    // Common-prefix/suffix diff in UTF-16 units; never splits a surrogate
+    // pair. Returns null when saved === current.
+    function diff(saved, current) {
+        if (saved === current) return null;
+        const maxP = Math.min(saved.length, current.length);
+        let pLen = 0;
+        while (pLen < maxP && saved[pLen] === current[pLen]) pLen++;
+        if (pLen > 0 && pLen < saved.length
+            && isHighSurrogate(saved.charCodeAt(pLen - 1)) && isLowSurrogate(saved.charCodeAt(pLen))) {
+            pLen--;
+        }
+        const maxS = Math.min(saved.length - pLen, current.length - pLen);
+        let sLen = 0;
+        while (sLen < maxS && saved[saved.length - 1 - sLen] === current[current.length - 1 - sLen]) sLen++;
+        if (sLen > 0) {
+            const savedSuffixStart = saved.length - sLen;
+            if (savedSuffixStart > pLen
+                && isHighSurrogate(saved.charCodeAt(savedSuffixStart - 1)) && isLowSurrogate(saved.charCodeAt(savedSuffixStart))) {
+                sLen--;
+            }
+        }
+        const removed = saved.slice(pLen, saved.length - sLen);
+        const inserted = current.slice(pLen, current.length - sLen);
+        if (removed === '' && inserted === '') return null;
+        return { from: pLen, removed: removed, inserted: inserted };
+    }
+
+    // Shifts every data-s/e/ps/pe/ds/de >= from by delta, skipping anything
+    // inside (or being) an actively-edited block ([data-edited]).
+    function shift(root, from, delta) {
+        if (!delta) return;
+        const attrs = ['s', 'e', 'ps', 'pe', 'ds', 'de'];
+        root.querySelectorAll('[data-s],[data-e],[data-ps],[data-pe],[data-ds],[data-de]').forEach(function (el) {
+            if (el.closest('[data-edited]')) return;
+            attrs.forEach(function (a) {
+                const key = 'data-' + a;
+                if (el.hasAttribute(key)) {
+                    const v = +el.getAttribute(key);
+                    if (v >= from) el.setAttribute(key, String(v + delta));
+                }
+            });
+        });
+    }
+
+    function convertSoftBreaks(root) {
+        const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
+            acceptNode: function (n) {
+                return (n.parentElement && n.parentElement.closest('[data-deco]'))
+                    ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT;
+            },
+        });
+        const nodes = [];
+        let n;
+        while ((n = walker.nextNode())) nodes.push(n);
+        nodes.forEach(function (node) {
+            if (node.data.indexOf('\n') === -1) return;
+            const parts = node.data.split('\n');
+            const frag = document.createDocumentFragment();
+            parts.forEach(function (part, i) {
+                if (part !== '') frag.appendChild(document.createTextNode(part));
+                if (i < parts.length - 1) {
+                    const br = document.createElement('br');
+                    br.setAttribute('data-vt', '');
+                    frag.appendChild(br);
+                }
+            });
+            node.replaceWith(frag);
+        });
+    }
+
+    function removeFiller(el) {
+        el.querySelectorAll('[data-deco]').forEach(function (n) {
+            if (n.textContent === '\u200B') n.remove();
+        });
+    }
+
+    function insertBreakAtCaret(block, attr) {
+        const sel = global.getSelection();
+        if (!sel || sel.rangeCount === 0) return;
+        const range = sel.getRangeAt(0);
+        if (!block.contains(range.commonAncestorContainer)) return;
+        range.deleteContents();
+        const br = document.createElement('br');
+        br.setAttribute(attr, '');
+        range.insertNode(br);
+        range.setStartAfter(br);
+        range.collapse(true);
+        sel.removeAllRanges();
+        sel.addRange(range);
+    }
+
+    function insertPlainText(block, text) {
+        const sel = global.getSelection();
+        if (!sel || sel.rangeCount === 0) return;
+        const range = sel.getRangeAt(0);
+        if (!block.contains(range.commonAncestorContainer)) return;
+        range.deleteContents();
+        const lines = String(text).split('\n');
+        lines.forEach(function (line, i) {
+            if (i > 0) {
+                const br = document.createElement('br');
+                br.setAttribute('data-pb', '');
+                range.insertNode(br);
+                range.setStartAfter(br);
+                range.collapse(true);
+            }
+            if (line !== '') {
+                const node = document.createTextNode(line);
+                range.insertNode(node);
+                range.setStartAfter(node);
+                range.collapse(true);
+            }
+        });
+        sel.removeAllRanges();
+        sel.addRange(range);
+    }
+
+    function rangesOverlap(a, b) {
+        return a.compareBoundaryPoints(Range.END_TO_START, b) < 0 && a.compareBoundaryPoints(Range.START_TO_END, b) > 0;
+    }
+
+    function rangesIntersectAtom(block, staticRanges) {
+        const atoms = block.querySelectorAll('[data-atom]');
+        if (!atoms.length || !staticRanges || !staticRanges.length) return false;
+        for (const r of staticRanges) {
+            let range;
+            try {
+                range = document.createRange();
+                range.setStart(r.startContainer, r.startOffset);
+                range.setEnd(r.endContainer, r.endOffset);
+            } catch (e) {
+                continue;
+            }
+            for (const atom of atoms) {
+                const atomRange = document.createRange();
+                atomRange.selectNode(atom);
+                if (rangesOverlap(range, atomRange)) return true;
+            }
+        }
+        return false;
+    }
+
+    function placeCaretAtEnd(el) {
+        const sel = global.getSelection();
+        const range = document.createRange();
+        range.selectNodeContents(el);
+        range.collapse(false);
+        sel.removeAllRanges();
+        sel.addRange(range);
+    }
+
+    const TOC_TOOLTIP = 'Tidak bisa diedit di sini: daftar isi';
+    const SUGGESTION_TOOLTIP = 'Tidak bisa diedit di sini: ada saran (suggestion) yang belum diterima';
+
     // Alpine component of the page (x-data="gdPreviewPage()").
     function gdPreviewPage() {
         return {
             range: null, comment: '', busy: false, active: null, flash: null, showResolved: false,
             _flashTimer: null, _fit: null,
 
-            // Edit mode (Task 4b wires the real behaviour; these are no-op
-            // stubs so the toolbar has no Alpine errors before then).
+            // Edit mode.
             mode: 'comment', save: 'saved', block: null, revision: null,
+            _errorMessage: '', _anyEdited: false, _saveDebounce: null,
 
-            setMode(next) { this.mode = next; },
-            retrySave() {},
-            copyBlock() {},
-            reloadAfterConflict() {},
-            deleteParagraph() {},
+            wire() { return this.$wire || global.gdFakeWire; },
 
             get activeCss() { return highlightCss(this.active, this.flash); },
+            get saveError() { return this._errorMessage; },
 
             init() {
                 this._fit = autoFit(this.$refs.canvas);
-                global.addEventListener('keydown', (e) => { if (e.key === 'Escape') this.active = null; });
+                this.revision = (this.$wire && this.$wire.revisionId) || this.$root.dataset.revision || null;
+                this.$refs.doc.querySelectorAll('[data-ro]').forEach((el) => {
+                    el.title = el.dataset.ro === 'toc' ? TOC_TOOLTIP : SUGGESTION_TOOLTIP;
+                });
+                global.addEventListener('keydown', (e) => {
+                    if (e.key === 'Escape') {
+                        this.active = null;
+                        if (this.mode === 'edit' && this.block) this.leaveBlock();
+                    }
+                });
+                global.addEventListener('beforeunload', (e) => {
+                    if (['dirty', 'saving', 'error', 'conflict'].includes(this.save)) {
+                        e.preventDefault();
+                        e.returnValue = '';
+                    }
+                });
             },
 
             card(id) {
-                return this.$root.querySelector('.gd-card[data-comment-id' + '="' + CSS.escape(id) + '"]');
+                return this.$root.querySelector('.gd-card[data-comment-id' + '=\"' + CSS.escape(id) + '\"]');
             },
 
             onDocUp(e) {
+                if (this.mode === 'edit') { this.onEditClick(e); return; }
                 const r = selectionToRange(this.$refs.doc);
                 if (r) { this.range = r; return; }
                 // Collapsed: a click. Highlighted text activates its comment.
@@ -179,6 +404,8 @@
                 this.range = null;
                 this.comment = '';
                 global.getSelection().removeAllRanges();
+                this.block = null;
+                this.save = 'saved';
                 this.$nextTick(() => {
                     if (this._fit) this._fit();
                     const want = detail && detail.activate;
@@ -188,6 +415,15 @@
                         nav.scrollTo(nav.spans(this.$refs.doc, want)[0]);
                     } else if (this.active && !this.card(this.active)) {
                         this.active = null;
+                    }
+                    if (detail && typeof detail.mergeTarget === 'number' && this.mode === 'edit') {
+                        const target = detail.mergeTarget;
+                        const el = Array.from(this.$refs.doc.querySelectorAll('[data-ps]'))
+                            .find((p) => +p.dataset.ps <= target && target < +p.dataset.pe + 1);
+                        if (el) {
+                            this.activateBlock(el);
+                            placeCaretAtEnd(el);
+                        }
                     }
                 });
             },
@@ -201,9 +437,242 @@
                     this.busy = false;
                 }
             },
+
+            // ---- Edit mode -------------------------------------------------
+
+            setMode(next) {
+                if (next === this.mode) return;
+                if (this.mode === 'edit' && next === 'comment') {
+                    this._leaveEditMode(next);
+                    return;
+                }
+                this.mode = next;
+            },
+
+            async _leaveEditMode(next) {
+                const block = this.block;
+                if (block) {
+                    await this.triggerSave(block);
+                    if (this.save === 'conflict' || this.save === 'error') return; // stay in Edit
+                    this.leaveBlock(block);
+                }
+                if (this._anyEdited) {
+                    this._anyEdited = false;
+                    await this.wire().loadDocument();
+                    this.reloaded();
+                }
+                this.mode = next;
+            },
+
+            activateBlock(el) {
+                this.block = el;
+                this.save = 'saved';
+                el.setAttribute('contenteditable', 'true');
+                el.setAttribute('data-edited', '');
+                el.querySelectorAll('[data-atom], [data-deco]').forEach((n) => n.setAttribute('contenteditable', 'false'));
+                convertSoftBreaks(el);
+                removeFiller(el);
+                el._savedText = read(el);
+                el.focus();
+            },
+
+            async leaveBlock(block) {
+                block = block || this.block;
+                if (!block) return;
+                await this.triggerSave(block);
+                if (this.block === block) this.block = null;
+                block.removeAttribute('contenteditable');
+                block.removeAttribute('data-edited');
+                block.querySelectorAll('[data-atom], [data-deco]').forEach((n) => n.removeAttribute('contenteditable'));
+            },
+
+            onEditClick(e) {
+                const target = e.target.closest('[data-ps]');
+                if (target && target === this.block) return;
+                const old = this.block;
+                if (old) this.leaveBlock(old);
+                if (!target || target.dataset.ro) return;
+                this.activateBlock(target);
+            },
+
+            onEditInput() {
+                if (this.mode !== 'edit' || !this.block) return;
+                if (this.save === 'conflict') return; // frozen until Salin teks / Muat ulang
+                this.save = 'dirty';
+                clearTimeout(this._saveDebounce);
+                this._saveDebounce = setTimeout(() => this.triggerSave(this.block), 1500);
+            },
+
+            onBeforeInput(e) {
+                if (this.mode !== 'edit' || !this.block || !this.block.contains(e.target)) return;
+                const t = e.inputType;
+                if (t === 'insertParagraph') {
+                    e.preventDefault();
+                    insertBreakAtCaret(this.block, 'data-pb');
+                    this.onEditInput();
+                    return;
+                }
+                if (t === 'insertLineBreak') {
+                    e.preventDefault();
+                    insertBreakAtCaret(this.block, 'data-vt');
+                    this.onEditInput();
+                    return;
+                }
+                if (t === 'insertFromPaste' || t === 'insertFromDrop') {
+                    e.preventDefault();
+                    const dt = e.dataTransfer || global.clipboardData;
+                    const text = dt ? dt.getData('text/plain') : '';
+                    insertPlainText(this.block, text);
+                    this.onEditInput();
+                    return;
+                }
+                if (t && t.indexOf('format') === 0) {
+                    e.preventDefault();
+                    return;
+                }
+                if (t && t.indexOf('delete') === 0) {
+                    if (t === 'deleteContentBackward' && this.caretAtBlockStart() && this.block.hasAttribute('data-merge')) {
+                        e.preventDefault();
+                        this.mergeUp();
+                        return;
+                    }
+                    const ranges = e.getTargetRanges ? e.getTargetRanges() : [];
+                    if (rangesIntersectAtom(this.block, ranges)) {
+                        e.preventDefault();
+                    }
+                }
+            },
+
+            caretAtBlockStart() {
+                const sel = global.getSelection();
+                if (!sel || !sel.isCollapsed || sel.rangeCount === 0) return false;
+                const r = sel.getRangeAt(0);
+                if (!this.block.contains(r.startContainer)) return false;
+                return offsetOf(this.block, r.startContainer, r.startOffset) === 0;
+            },
+
+            triggerSave(block) {
+                if (block._saving) return block._savePromise;
+                block._saving = true;
+                block._savePromise = this._saveLoop(block).finally(() => { block._saving = false; });
+                return block._savePromise;
+            },
+
+            async _saveLoop(block) {
+                for (;;) {
+                    const current = read(block);
+                    const d = diff(block._savedText, current);
+                    if (!d) {
+                        if (this.block === block) this.save = 'saved';
+                        return;
+                    }
+                    if (d.removed.indexOf('\uFFFC') !== -1) {
+                        if (this.block === block) {
+                            this.save = 'error';
+                            this._errorMessage = 'Objek (gambar/chip) tidak bisa dihapus dari sini.';
+                        }
+                        return;
+                    }
+                    if (this.block === block) this.save = 'saving';
+                    const ps = +block.dataset.ps;
+                    const start = ps + d.from;
+                    const end = start + d.removed.length;
+                    const revision = this.revision;
+                    const res = await this.wire().saveEdit(revision, start, end, d.inserted);
+                    if (!res.ok) {
+                        if (this.block === block) {
+                            if (res.reason === 'conflict') {
+                                this.save = 'conflict';
+                            } else {
+                                this.save = 'error';
+                                this._errorMessage = res.message || 'Gagal menyimpan';
+                            }
+                        }
+                        return;
+                    }
+                    this.revision = res.revisionId;
+                    this._anyEdited = true;
+                    const delta = d.inserted.length - d.removed.length;
+                    const oldPe = +block.dataset.pe;
+                    block.dataset.pe = String(oldPe + delta);
+                    block.dataset.de = String(+block.dataset.de + delta);
+                    shift(this.$refs.doc, oldPe, delta);
+                    block._savedText = current;
+                }
+            },
+
+            retrySave() {
+                if (this.block) this.triggerSave(this.block);
+            },
+
+            copyBlock() {
+                if (!this.block) return;
+                const text = read(this.block);
+                if (global.navigator && global.navigator.clipboard && global.navigator.clipboard.writeText) {
+                    global.navigator.clipboard.writeText(text).catch(() => {});
+                }
+            },
+
+            async reloadAfterConflict() {
+                if (!global.confirm('Perubahan yang belum tersimpan di paragraf ini akan hilang. Lanjut?')) return;
+                if (this.block) {
+                    this.block.removeAttribute('contenteditable');
+                    this.block.removeAttribute('data-edited');
+                }
+                this.save = 'saved';
+                await this.wire().loadDocument();
+                this.reloaded();
+            },
+
+            async mergeUp() {
+                const block = this.block;
+                if (!block) return;
+                await this.triggerSave(block);
+                if (this.save === 'conflict' || this.save === 'error') return;
+                const ps = +block.dataset.ps;
+                const res = await this.wire().saveEdit(this.revision, ps - 1, ps, '');
+                if (!res.ok) {
+                    if (res.reason === 'conflict') this.save = 'conflict';
+                    else { this.save = 'error'; this._errorMessage = res.message || 'Gagal menyimpan'; }
+                    return;
+                }
+                this.revision = res.revisionId;
+                this._anyEdited = true;
+                await this.wire().loadDocument();
+                this.reloaded({ mergeTarget: ps - 1 });
+            },
+
+            async deleteParagraph() {
+                const block = this.block;
+                if (!block) return;
+                await this.triggerSave(block);
+                if (this.save === 'conflict' || this.save === 'error') return;
+                const activeIds = new Set();
+                block.querySelectorAll('[data-c]').forEach((el) => el.dataset.c.split(' ').forEach((id) => activeIds.add(id)));
+                const doneIds = new Set();
+                block.querySelectorAll('[data-r]').forEach((el) => el.dataset.r.split(' ').forEach((id) => doneIds.add(id)));
+                if (activeIds.size || doneIds.size) {
+                    const msg = 'Paragraf ini punya ' + activeIds.size + ' komentar aktif dan '
+                        + doneIds.size + ' komentar selesai. Teks yang dikomentari akan ikut terhapus. Lanjut?';
+                    if (!global.confirm(msg)) return;
+                }
+                const ds = +block.dataset.ds;
+                const de = +block.dataset.de;
+                const res = await this.wire().saveEdit(this.revision, ds, de, '');
+                if (!res.ok) {
+                    if (res.reason === 'conflict') this.save = 'conflict';
+                    else { this.save = 'error'; this._errorMessage = res.message || 'Gagal menyimpan'; }
+                    return;
+                }
+                this.revision = res.revisionId;
+                this._anyEdited = true;
+                await this.wire().loadDocument();
+                this.reloaded();
+            },
         };
     }
 
     global.GdPreview = { selectionToRange: selectionToRange, nav: nav, highlightCss: highlightCss, autoFit: autoFit };
+    global.GdEdit = { read: read, diff: diff, shift: shift, offsetOf: offsetOf };
     global.gdPreviewPage = gdPreviewPage;
 })(window);

@@ -12,7 +12,7 @@
             <x-filament::button wire:click="loadDocument" class="mt-3">Coba lagi</x-filament::button>
         </x-filament::section>
     @else
-        <div class="gd-wrap" x-data="gdPreviewPage()"
+        <div class="gd-wrap" x-data="gdPreviewPage()" data-revision="{{ $revisionId }}"
              x-on:gd-preview-reloaded.window="reloaded($event.detail)">
             <div>
                 @include('filament.pages.partials.gd-toolbar', [

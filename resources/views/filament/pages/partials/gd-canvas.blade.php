@@ -5,6 +5,8 @@
         <div x-ref="doc" id="gd-doc"
              x-on:mouseup="onDocUp($event)"
              x-on:keyup="onDocUp($event)"
-             x-on:touchend="setTimeout(() => onDocUp($event), 50)">{!! $html !!}</div>
+             x-on:touchend="setTimeout(() => onDocUp($event), 50)"
+             x-on:beforeinput="onBeforeInput($event)"
+             x-on:input="onEditInput($event)">{!! $html !!}</div>
     </div>
 </div>
